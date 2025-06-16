@@ -1,0 +1,1 @@
+node app.js --acsUrl http://localhost:5001/saml/callback --audience http://localhost:4300/metadata --issuer urn:custom:idp --port 7000 --host 0.0.0.0
