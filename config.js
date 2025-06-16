@@ -3,13 +3,13 @@
  * User Profile
  */
 var profile = {
-  userName: 'saml.jackson@example.com',
+  userName: 'vikas.yadav@walkingtree.com',
   nameIdFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
-  firstName: 'Saml',
-  lastName: 'Jackson',
-  displayName: 'saml jackson',
-  email: 'saml.jackson@example.com',
-  mobilePhone: '+1-415-555-5141',
+  FirstName: 'Vikas',
+  LastName: 'Yadav',
+  displayName: 'Vikas Yadav',
+  email: 'vikas.yadav@walkingtree.com',
+  mobilePhone: '+916386000265',
   groups: 'Simple IdP Users, West Coast Users, Cloud Users'
 }
 
@@ -17,13 +17,13 @@ var profile = {
  * SAML Attribute Metadata
  */
 var metadata = [{
-  id: "firstName",
+  id: "FirstName",
   optional: false,
   displayName: 'First Name',
   description: 'The given name of the user',
   multiValue: false
 }, {
-  id: "lastName",
+  id: "LastName",
   optional: false,
   displayName: 'Last Name',
   description: 'The surname of the user',
