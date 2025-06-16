@@ -12,7 +12,7 @@ i.fa span {
 }
 
 .panel-primary > .panel-heading {
-  background-color: #2d3f50;
+  background-color: #18bc9c; /* was #2d3f50 */
   color: #ecf0f1;
 }
 
