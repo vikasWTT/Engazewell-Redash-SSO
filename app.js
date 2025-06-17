@@ -191,7 +191,6 @@ function _runServer(argv) {
   const httpServer = argv.https ?
     https.createServer({ key: argv.httpsPrivateKey, cert: argv.httpsCert }, app) :
     http.createServer(app);
-  const blocks = {};
 
   const idpOptions = {
     issuer: argv.issuer,
@@ -238,47 +237,14 @@ function _runServer(argv) {
           authnContextEl.appendChild(authnContextDeclEl);
         }
       }
-    },
-    responseHandler: function(response, opts, req, res, next) {
-      res.render('samlresponse', {
-        AcsUrl: opts.postUrl,
-        SAMLResponse: response.toString('base64'),
-        RelayState: opts.RelayState
-      });
     }
   };
 
   app.set('host', process.env.HOST || argv.host);
   app.set('port', process.env.PORT || argv.port);
-  app.set('views', path.join(__dirname, 'views'));
-  app.set('view engine', 'hbs');
-  app.set('view options', { layout: 'layout' });
-  app.engine('handlebars', hbs.__express);
-
-  hbs.registerHelper('extend', function(name, context) {
-    var block = blocks[name];
-    if (!block) block = blocks[name] = [];
-    block.push(context.fn(this));
-  });
-  hbs.registerHelper('block', function(name) {
-    const val = (blocks[name] || []).join('\n');
-    blocks[name] = [];
-    return val;
-  });
-  hbs.registerHelper('select', function(selected, options) {
-    return options.fn(this).replace(
-      new RegExp(' value="' + selected + '"'), '$& selected="selected"');
-  });
-  hbs.registerHelper('getProperty', function(attribute, context) {
-    return context[attribute];
-  });
-  hbs.registerHelper('serialize', function(context) {
-    return Buffer.from(JSON.stringify(context)).toString('base64');
-  });
 
   app.use(logger('dev'));
   app.use(bodyParser.urlencoded({ extended: true }));
-  app.use(express.static(path.join(__dirname, 'public')));
   app.use(session({
     secret: 'The universe works on a math equation that never even ever really ends in the end',
     resave: false,
@@ -287,57 +253,24 @@ function _runServer(argv) {
     cookie: { maxAge: 60 * 60 * 1000 }
   }));
 
-  const getSessionIndex = function(req) {
-    console.log(chalk.blue('Getting SAML Session Index...'));
-    if (req && req.session) {
-      return Math.abs(getHashCode(req.session.id)).toString();
-    }
-  };
+  const getSessionIndex = req => req?.session ? Math.abs(getHashCode(req.session.id)).toString() : undefined;
+  const getParticipant = req => ({
+    serviceProviderId: req.idp.options.serviceProviderId,
+    sessionIndex: getSessionIndex(req),
+    nameId: req.user.userName,
+    nameIdFormat: req.user.nameIdFormat,
+    serviceProviderLogoutURL: req.idp.options.sloUrl
+  });
 
-  const getParticipant = function(req) {
-    console.log(chalk.blue('Getting SAML Session Participant...'));
-    return {
-      serviceProviderId: req.idp.options.serviceProviderId,
-      sessionIndex: getSessionIndex(req),
-      nameId: req.user.userName,
-      nameIdFormat: req.user.nameIdFormat,
-      serviceProviderLogoutURL: req.idp.options.sloUrl
-    };
-  };
-
-  const parseLogoutRequest = function(req, res, next) {
-    console.log(chalk.blue('Parsing SAML LogoutRequest...'));
-    if (!req.idp.options.sloUrl) {
-      return res.render('error', {
-        message: 'SAML Single Logout Service URL not defined for Service Provider'
-      });
-    }
-    return samlp.logout({
-      issuer: req.idp.options.issuer,
-      cert: req.idp.options.cert,
-      key: req.idp.options.key,
-      digestAlgorithm: req.idp.options.digestAlgorithm,
-      signatureAlgorithm: req.idp.options.signatureAlgorithm,
-      sessionParticipants: new SessionParticipants([req.participant]),
-      clearIdPSession: function(callback) {
-        req.session.destroy();
-        callback();
-      }
-    })(req, res, next);
-  };
-
-  app.use(function(req, res, next) {
+  app.use((req, res, next) => {
     if (argv.rollSession) {
-      req.session.regenerate(function() {
-        return next();
-      });
+      req.session.regenerate(() => next());
     } else {
       next();
     }
   });
 
-  app.use(function(req, res, next) {
-    console.log(chalk.blue('Setting up request context...'));
+  app.use((req, res, next) => {
     req.user = argv.config.user;
     req.metadata = argv.config.metadata;
     req.idp = { options: idpOptions };
@@ -345,24 +278,10 @@ function _runServer(argv) {
     next();
   });
 
-  // Redash (SP)                        Engazewell (IdP)
-  //   |                                    |
-  //   |---[GET or POST] AuthnRequest------>|
-  //   |                                    |
-  //   |       parse, prepare SAMLResponse  |
-  //   |<---------[POST] SAMLResponse-------|  <-- via HTML form auto-submit
-  //   |                                    |
-  //   |          Redash logs user in       |
+  app.all(IDP_PATHS.SSO, (req, res) => {
+    samlp.parseRequest(req, (err, data) => {
+      if (err) return res.status(400).send('SAML AuthnRequest Parse Error: ' + err.message);
 
-
-  // Request SAML AuthnRequest from Redash
-  app.all(IDP_PATHS.SSO, function(req, res, next) {
-    // Parse SAML request
-    console.log(chalk.blue('Received SAML AuthnRequest from Redash'));
-    samlp.parseRequest(req, function(err, data) {
-      if (err) {
-        return res.status(400).send('SAML AuthnRequest Parse Error: ' + err.message);
-      }
       if (data) {
         req.authnRequest = {
           relayState: req.query.RelayState || req.body.RelayState,
@@ -373,40 +292,20 @@ function _runServer(argv) {
           forceAuthn: data.forceAuthn === 'true'
         };
       }
-      const authOptions = extend({}, req.idp.options);
 
-      // Engazewell check if user is authenticated or in database of Engazewell
-
+      // Dummy check: In real-world, you'd check user login status
       let bengazewelluserlogin = true;
-      if(!bengazewelluserlogin){
-         const errorMsg = 'User not authenticated. Please log in to Engazewell before accessing Redash.';
-
-            console.log(chalk.red(errorMsg));
-
-            // Send an error message to the browser
-            return res.status(401).send(`
-              <html>
-                <head><title>SSO Error</title></head>
-                <body style="font-family: sans-serif;">
-                  <h2 style="color: red;">SSO Login Failed</h2>
-                  <p>${errorMsg}</p>
-                  <a href="/login">Go to Engazewell Login</a>
-                </body>
-              </html>
-            `);
+      if (!bengazewelluserlogin) {
+        return res.status(401).send('User not authenticated. Please log in to Engazewell before accessing Redash.');
       }
 
-      // If user is authenticated, then we can proceed with SAML response
-
-      // we can extract user information from the engazewell session
-
+      const authOptions = extend({}, req.idp.options);
       if (req.authnRequest) {
         authOptions.inResponseTo = req.authnRequest.id;
         if (req.idp.options.allowRequestAcsUrl && req.authnRequest.acsUrl) {
           authOptions.acsUrl = req.authnRequest.acsUrl;
           authOptions.recipient = req.authnRequest.acsUrl;
           authOptions.destination = req.authnRequest.acsUrl;
-          authOptions.forceAuthn = req.authnRequest.forceAuthn;
         }
         if (req.authnRequest.relayState) {
           authOptions.RelayState = req.authnRequest.relayState;
@@ -416,72 +315,28 @@ function _runServer(argv) {
         delete authOptions.encryptionCert;
         delete authOptions.encryptionPublicKey;
       }
+
       authOptions.sessionIndex = getSessionIndex(req);
-      // Respond with SAML assertion immediately, no UI
+
       return samlp.auth(authOptions)(req, res);
     });
   });
 
-  app.post(IDP_PATHS.SLO, parseLogoutRequest);
-
-  app.get(IDP_PATHS.METADATA, function(req, res) {
+  app.get(IDP_PATHS.METADATA, (req, res) => {
     samlp.metadata(req.idp.options)(req, res);
   });
 
-  app.get(IDP_PATHS.SIGN_OUT, function(req, res) {
-    if (req.idp.options.sloUrl) {
-      res.redirect(IDP_PATHS.SLO);
-    } else {
-      req.session.destroy(function(err) {
-        if (err) throw err;
-        res.redirect('back');
-      });
-    }
-  });
+  app.use((req, res) => res.status(404).send('Route Not Found'));
 
-  app.get([IDP_PATHS.SETTINGS], function(req, res) {
-    res.render('settings', { idp: req.idp.options });
-  });
-
-  app.post([IDP_PATHS.SETTINGS], function(req, res) {
-    Object.keys(req.body).forEach(function(key) {
-      switch (req.body[key].toLowerCase()) {
-        case "true": case "yes": case "1":
-          req.idp.options[key] = true;
-          break;
-        case "false": case "no": case "0":
-          req.idp.options[key] = false;
-          break;
-        default:
-          req.idp.options[key] = req.body[key];
-          break;
-      }
-      if (req.body[key].match(/^\d+$/)) {
-        req.idp.options[key] = parseInt(req.body[key], 10);
-      }
-    });
-    res.redirect('/');
-  });
-
-  app.use(function(req, res, next) {
-    const err = new Error('Route Not Found');
-    err.status = 404;
-    next(err);
-  });
-
-  app.use(function(err, req, res, next) {
-    if (err) {
-      res.status(err.status || 500);
-      res.render('error', {
-        message: err.message,
-        error: err
-      });
-    }
+  app.use((err, req, res, next) => {
+    console.error(err);
+    res.status(err.status || 500).send(`Error: ${err.message}`);
   });
 
   httpServer.listen(app.get('port'), app.get('host'));
   return httpServer;
 }
+
 
 function runServer(options) {
   const args = processArgs([], options);
