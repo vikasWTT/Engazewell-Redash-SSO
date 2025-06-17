@@ -287,73 +287,15 @@ function _runServer(argv) {
     cookie: { maxAge: 60 * 60 * 1000 }
   }));
 
-  const showUser = function(req, res, next) {
-    res.render('user', {
-      user: req.user,
-      participant: req.participant,
-      metadata: req.metadata,
-      authnRequest: req.authnRequest,
-      idp: req.idp.options,
-      paths: IDP_PATHS
-    });
-  };
-
-  const parseSamlRequest = function(req, res, next) {
-    console.log(chalk.blue('Parsing SAML AuthnRequest...'));
-    samlp.parseRequest(req, function(err, data) {
-      if (err) {
-        return res.render('error', {
-          message: 'SAML AuthnRequest Parse Error: ' + err.message,
-          error: err
-        });
-      }
-      if (data) {
-        req.authnRequest = {
-          relayState: req.query.RelayState || req.body.RelayState,
-          id: data.id,
-          issuer: data.issuer,
-          destination: data.destination,
-          acsUrl: data.assertionConsumerServiceURL,
-          forceAuthn: data.forceAuthn === 'true'
-        };
-      }
-      // Accept both boolean false and string 'false'
-      const showUserInfo = req.idp.options.showUserInfoPage;
-      if (showUserInfo === false || showUserInfo === 'false') {
-        // Authenticate immediately
-        const authOptions = extend({}, req.idp.options);
-        if (req.authnRequest) {
-          authOptions.inResponseTo = req.authnRequest.id;
-          if (req.idp.options.allowRequestAcsUrl && req.authnRequest.acsUrl) {
-            authOptions.acsUrl = req.authnRequest.acsUrl;
-            authOptions.recipient = req.authnRequest.acsUrl;
-            authOptions.destination = req.authnRequest.acsUrl;
-            authOptions.forceAuthn = req.authnRequest.forceAuthn;
-          }
-          if (req.authnRequest.relayState) {
-            authOptions.RelayState = req.authnRequest.relayState;
-          }
-        }
-        if (!authOptions.encryptAssertion) {
-          delete authOptions.encryptionCert;
-          delete authOptions.encryptionPublicKey;
-        }
-        authOptions.sessionIndex = getSessionIndex(req);
-        return samlp.auth(authOptions)(req, res);
-      } else {
-        // Show user info page as before
-        return showUser(req, res, next);
-      }
-    });
-  };
-
   const getSessionIndex = function(req) {
+    console.log(chalk.blue('Getting SAML Session Index...'));
     if (req && req.session) {
       return Math.abs(getHashCode(req.session.id)).toString();
     }
   };
 
   const getParticipant = function(req) {
+    console.log(chalk.blue('Getting SAML Session Participant...'));
     return {
       serviceProviderId: req.idp.options.serviceProviderId,
       sessionIndex: getSessionIndex(req),
@@ -395,6 +337,7 @@ function _runServer(argv) {
   });
 
   app.use(function(req, res, next) {
+    console.log(chalk.blue('Setting up request context...'));
     req.user = argv.config.user;
     req.metadata = argv.config.metadata;
     req.idp = { options: idpOptions };
@@ -481,60 +424,8 @@ function _runServer(argv) {
 
   app.post(IDP_PATHS.SLO, parseLogoutRequest);
 
-  app.post(IDP_PATHS.SIGN_IN, function(req, res) {
-    console.log(chalk.blue('Received SAML AuthnRequest... 2'));
-    const authOptions = extend({}, req.idp.options);
-    Object.keys(req.body).forEach(function(key) {
-      if (key === '_authnRequest') {
-        const buffer = Buffer.from(req.body[key], 'base64');
-        req.authnRequest = JSON.parse(buffer.toString('utf8'));
-        authOptions.inResponseTo = req.authnRequest.id;
-        if (req.idp.options.allowRequestAcsUrl && req.authnRequest.acsUrl) {
-          authOptions.acsUrl = req.authnRequest.acsUrl;
-          authOptions.recipient = req.authnRequest.acsUrl;
-          authOptions.destination = req.authnRequest.acsUrl;
-          authOptions.forceAuthn = req.authnRequest.forceAuthn;
-        }
-        if (req.authnRequest.relayState) {
-          authOptions.RelayState = req.authnRequest.relayState;
-        }
-      } else {
-        req.user[key] = req.body[key];
-      }
-    });
-
-    if (!authOptions.encryptAssertion) {
-      delete authOptions.encryptionCert;
-      delete authOptions.encryptionPublicKey;
-    }
-    authOptions.sessionIndex = getSessionIndex(req);
-    samlp.auth(authOptions)(req, res);
-  });
-
   app.get(IDP_PATHS.METADATA, function(req, res) {
     samlp.metadata(req.idp.options)(req, res);
-  });
-
-  app.post(IDP_PATHS.METADATA, function(req, res) {
-    console.log(chalk.blue('Received SAML Metadata POST request...'));
-    if (req.body && req.body.attributeName && req.body.displayName) {
-      let attributeExists = false;
-      const attribute = {
-        id: req.body.attributeName,
-        optional: true,
-        displayName: req.body.displayName,
-        description: req.body.description || '',
-        multiValue: req.body.valueType === 'multi'
-      };
-      req.metadata.forEach(function(entry) {
-        if (entry.id === req.body.attributeName) {
-          entry = attribute;
-          attributeExists = true;
-        }
-      });
-      if (!attributeExists) req.metadata.push(attribute);
-      res.status(200).end();
-    }
   });
 
   app.get(IDP_PATHS.SIGN_OUT, function(req, res) {
