@@ -1,37 +1,40 @@
-/**
- * Module dependencies.
- */
-const chalk = require('chalk'),
-      express = require('express'),
-      fs = require('fs'),
-      http = require('http'),
-      https = require('https'),
-      path = require('path'),
-      extend = require('extend'),
-      logger = require('morgan'),
-      bodyParser = require('body-parser'),
-      session = require('express-session'),
-      yargs = require('yargs/yargs'),
-      samlp = require('samlp'),
-      Parser = require('@xmldom/xmldom').DOMParser,
-      SimpleProfileMapper = require('./lib/simpleProfileMapper.js');
+// Node.js and npm module dependencies
+const chalk = require('chalk');                    // Terminal string styling
+const express = require('express');                // Web framework
+const fs = require('fs');                          // File system access
+const http = require('http');                      // HTTP server
+const https = require('https');                    // HTTPS server
+const path = require('path');                      // File path utilities
+const extend = require('extend');                  // Deep object merging
+const logger = require('morgan');                  // HTTP request logger
+const bodyParser = require('body-parser');         // Parse request bodies
+const session = require('express-session');        // Session middleware
+const yargs = require('yargs/yargs');              // CLI argument parsing
+const samlp = require('samlp');                    // Core SAML processing
+const Parser = require('@xmldom/xmldom').DOMParser; // XML parsing
+const SimpleProfileMapper = require('./lib/simpleProfileMapper.js'); // Maps user profile to SAML attributes
+
 
 /**
  * Globals
  */
+// IDP route paths
 const IDP_PATHS = {
-  SSO: '/saml/sso',
-  SLO: '/saml/slo',
-  METADATA: '/metadata',
+  SSO: '/saml/sso',        // Main SSO endpoint
+  SLO: '/saml/slo',        // Single Logout endpoint (optional)
+  METADATA: '/metadata',   // Metadata endpoint
   SIGN_IN: '/signin',
   SIGN_OUT: '/signout',
   SETTINGS: '/settings'
 };
+
+// Certificate-related arguments
 const CERT_OPTIONS = [
   'cert', 'key', 'encryptionCert', 'encryptionPublicKey',
   'httpsPrivateKey', 'httpsCert'
 ];
 
+// Check if a given string matches a cert/key type
 function matchesCertType(value, type) {
   const CRYPT_TYPES = {
     certificate: /-----BEGIN CERTIFICATE-----[^-]*-----END CERTIFICATE-----/,
@@ -41,6 +44,7 @@ function matchesCertType(value, type) {
   return CRYPT_TYPES[type] && CRYPT_TYPES[type].test(value);
 }
 
+// Resolve the correct path for a file (relative, absolute, ~/, etc.)
 function resolveFilePath(filePath) {
   if (filePath.startsWith('saml-idp/')) {
     const resolvedPath = require.resolve(filePath.replace(/^saml\-idp\//, `${__dirname}/`));
@@ -57,6 +61,7 @@ function resolveFilePath(filePath) {
     .find(possiblePath => fs.existsSync(possiblePath));
 }
 
+// Read and return certificate/key from file or raw string
 function makeCertFileCoercer(type, description) {
   return function certFileCoercer(value) {
     if (matchesCertType(value, type)) return value;
@@ -66,6 +71,7 @@ function makeCertFileCoercer(type, description) {
   };
 }
 
+// Generate session hash from session ID
 function getHashCode(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -76,6 +82,7 @@ function getHashCode(str) {
   return hash;
 }
 
+// Setup CLI options and load config file
 function processArgs(args, options) {
   const baseArgv = options ? yargs(args).config(options) : yargs(args);
   return baseArgv
@@ -150,11 +157,15 @@ function processArgs(args, options) {
 }
 
 function _runServer(argv) {
+  // Start the Identity Provider server with provided arguments
   const app = express();
+
+  // Use HTTPS if configured, otherwise fallback to HTTP
   const server = argv.https
     ? https.createServer({ key: argv.httpsPrivateKey, cert: argv.httpsCert }, app)
     : http.createServer(app);
 
+   // SAML Identity Provider options
   const idpOptions = {
     issuer: argv.issuer,
     serviceProviderId: argv.serviceProviderId || argv.audience,
@@ -199,6 +210,7 @@ function _runServer(argv) {
     }
   };
 
+  // Set app port/host
   app.set('host', argv.host);
   app.set('port', argv.port);
 
@@ -212,9 +224,11 @@ function _runServer(argv) {
     cookie: { maxAge: 60 * 60 * 1000 }
   }));
 
+  // Helper to build sessionIndex
   const getSessionIndex = req =>
     req?.session ? Math.abs(getHashCode(req.session.id)).toString() : undefined;
 
+  // Extract SAML participant info (used in Logout etc.)
   const getParticipant = req => ({
     serviceProviderId: req.idp.options.serviceProviderId,
     sessionIndex: getSessionIndex(req),
@@ -223,11 +237,14 @@ function _runServer(argv) {
     serviceProviderLogoutURL: req.idp.options.sloUrl
   });
 
+  
+  // Optional session regeneration
   app.use((req, res, next) => {
     if (argv.rollSession) req.session.regenerate(() => next());
     else next();
   });
 
+  // Attach user/config to request for later use
   app.use((req, res, next) => {
     req.user = argv.config.user;
     req.metadata = argv.config.metadata;
@@ -236,6 +253,7 @@ function _runServer(argv) {
     next();
   });
 
+  // 🟢 Handle SAML AuthnRequest
   app.all(IDP_PATHS.SSO, (req, res) => {
     samlp.parseRequest(req, (err, data) => {
       if (err) return res.status(400).send('SAML AuthnRequest Parse Error: ' + err.message);
@@ -251,12 +269,13 @@ function _runServer(argv) {
         };
       }
 
-      // Simulated login check
+      // 🛡️ Simulated login check — customize this!
       let bengazewelluserlogin = true;
       if (!bengazewelluserlogin) {
         return res.status(401).send('User not authenticated. Please log in to Engazewell before accessing Redash.');
       }
 
+      // Merge with request data and initiate SAML AuthnResponse
       const authOptions = extend({}, req.idp.options, {
         sessionIndex: getSessionIndex(req),
         inResponseTo: req.authnRequest?.id,
